@@ -84,6 +84,16 @@
   .venc{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--fundo);font-size:14px}
   .venc:last-child{border:0}
   .atraso{color:var(--vermelho);font-weight:700}
+  .edit-pago{display:flex;gap:8px;margin-top:10px;align-items:center}
+  .edit-pago input{flex:1;padding:10px;font-size:17px}
+  .edit-pago button{border:0;border-radius:10px;padding:11px 14px;font-size:14px;font-weight:700}
+  .dif-mais{color:var(--vermelho);font-weight:700}
+  .dif-menos{color:var(--verde2);font-weight:700}
+  .tag.var{background:#fff1d6;color:#8a5a00}
+  .link{background:none;border:0;color:#2d5bb9;font-size:12px;padding:8px 0 0;text-decoration:underline}
+  label.chk{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:14px;color:var(--texto)}
+  label.chk input{width:22px;height:22px;margin:0}
+  form:not(.rec) .so-rec{display:none}
   details summary{cursor:pointer;list-style:none}
   details summary::-webkit-details-marker{display:none}
 </style>
@@ -125,6 +135,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
       <button type="button" data-t="parcelada" class="on">Parcelada / única</button>
       <button type="button" data-t="recorrente">Recorrente (todo mês)</button>
     </div>
+    <label class="chk so-rec"><input type="checkbox" id="fVar"> O valor varia todo mês (água, luz, gás…)</label>
     <label class="so-parc">O valor que vou digitar é</label>
     <div class="seg so-parc" id="modo">
       <button type="button" data-m="parcela" class="on">Da parcela</button>
@@ -184,7 +195,12 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
   // ---------- cálculo ----------
   function mesAtual(){ var d=new Date(); return d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); }
   function rec(c){ return c.tipo==='recorrente'; }
-  function pagoMes(c){ return c.pagoMes===mesAtual(); }
+  function valorPago(c, m){ m = m || mesAtual(); return (c.pagos && c.pagos[m] != null) ? c.pagos[m] : null; }
+  function pagoMes(c){ return valorPago(c) !== null; }
+  function variavel(c){ return c.variavel != null ? c.variavel : c.cat === 'Energia / Água / Gás'; }
+  // migração: contas já marcadas como pagas na versão anterior continuam pagas
+  contas.forEach(function(c){ if(c.tipo==='recorrente' && c.pagoMes && !(c.pagos && c.pagos[c.pagoMes]!=null)){ c.pagos = c.pagos || {}; c.pagos[c.pagoMes] = c.valorParcela; } });
+  var editando = null;
   function restante(c){ return rec(c) ? (pagoMes(c)?0:c.valorParcela) : Math.max(0, c.parcelas - c.pagas) * c.valorParcela; }
   function quitada(c){ return !rec(c) && c.pagas >= c.parcelas; }
 
@@ -195,6 +211,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     var m = mesAtual(); hist[m] = Math.round(((hist[m]||0) + v)*100)/100;
     try{ localStorage.setItem(CHAVE+'-hist', JSON.stringify(hist)); }catch(e){}
   }
+  function marcarPago(c, v){ var m = mesAtual(), ant = valorPago(c); c.pagos = c.pagos || {}; c.pagos[m] = v; c.pagoMes = m; registrar(v - (ant || 0)); }
 
   // ---------- tela ----------
   function render(){
@@ -237,17 +254,29 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
   }
 
   function cardRec(c){
-    var p = pagoMes(c);
-    return '<div class="conta'+(p?' pago':'')+'" data-id="'+c.id+'">'+
-      '<div class="topo"><div><div class="nome">'+esc(c.desc)+'<span class="tag">Todo mês</span></div><div class="cat">'+esc(c.cat)+(c.dia?' · vence dia '+c.dia:'')+'</div></div>'+
-      '<div class="valor">'+brl(c.valorParcela)+'<small>por mês</small></div></div>'+
-      '<div style="height:8px"></div>'+
-      '<div class="info"><span class="'+(p?'ok':'')+'">'+(p?'Paga este mês ✓':'Em aberto este mês')+'</span></div>'+
-      '<div class="botoes">'+
-        (p?'<button class="desfazer" data-a="desfazerMes">↶ Desfazer</button>':'<button class="pagar" data-a="pagarMes">✓ Paguei este mês</button>')+
-        '<button class="desfazer" data-a="valor">Alterar valor</button>'+
+    var p = pagoMes(c), vp = valorPago(c), va = variavel(c), info, corpo;
+    if(p){
+      var d = Math.round((vp - c.valorParcela)*100)/100;
+      info = '<span class="ok">Paga ✓ '+brl(vp)+'</span>'+(va && d ? '<span class="'+(d>0?'dif-mais':'dif-menos')+'">'+(d>0?'+':'−')+brl(Math.abs(d))+' do previsto</span>' : '');
+    } else info = '<span>Em aberto este mês'+(va?' · valor previsto':'')+'</span>';
+    if(editando === c.id){
+      corpo = '<div class="edit-pago"><input id="inPago" inputmode="decimal" value="'+String(p ? vp : c.valorParcela).replace('.',',')+'">'+
+        '<button class="pagar" data-a="confirmarPago">Confirmar</button><button class="desfazer" data-a="cancelarPago">✕</button></div>'+
+        '<div class="cat" style="margin-top:6px">Digite o valor real da conta deste mês (previsto: '+brl(c.valorParcela)+')</div>';
+    } else {
+      corpo = '<div class="botoes">'+
+        (p ? '<button class="desfazer" data-a="editarPago">Editar valor pago</button><button class="desfazer" data-a="desfazerMes">↶</button>'
+           : '<button class="pagar" data-a="pagarMes">✓ Paguei este mês</button>')+
+        '<button class="desfazer" data-a="valor">Previsto</button>'+
         '<button class="excluir" data-a="excluir">Excluir</button>'+
-      '</div></div>';
+        '</div>'+
+        '<button class="link" data-a="variavel">'+(va ? 'Valor varia todo mês ✓ (tocar para tornar fixo)' : 'Valor fixo (tocar se variar todo mês)')+'</button>';
+    }
+    return '<div class="conta" data-id="'+c.id+'">'+
+      '<div class="topo"><div><div class="nome">'+esc(c.desc)+'<span class="tag">Todo mês</span>'+(va?'<span class="tag var">Varia</span>':'')+'</div><div class="cat">'+esc(c.cat)+(c.dia?' · vence dia '+c.dia:'')+'</div></div>'+
+      '<div class="valor">'+brl(c.valorParcela)+'<small>'+(va?'previsto por mês':'por mês')+'</small></div></div>'+
+      '<div style="height:8px"></div>'+
+      '<div class="info">'+info+'</div>'+corpo+'</div>';
   }
 
   $('lista').addEventListener('click', function(e){
@@ -255,8 +284,14 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     var id = b.closest('.conta').getAttribute('data-id');
     var c = contas.find(function(x){return x.id===id;}); if(!c) return;
     var a = b.getAttribute('data-a');
-    if(a==='pagarMes'){ if(!pagoMes(c)) registrar(c.valorParcela); c.pagoMes = mesAtual(); }
-    else if(a==='desfazerMes'){ if(pagoMes(c)) registrar(-c.valorParcela); c.pagoMes = null; }
+    if(a==='pagarMes' || a==='editarPago'){
+      if(a==='pagarMes' && !variavel(c)){ marcarPago(c, c.valorParcela); }
+      else { editando = c.id; render(); var inp = $('inPago'); if(inp){ inp.focus(); inp.select(); } return; }
+    }
+    else if(a==='confirmarPago'){ var vr = num($('inPago').value); if(!vr){ $('inPago').focus(); return; } marcarPago(c, Math.round(vr*100)/100); editando = null; }
+    else if(a==='cancelarPago'){ editando = null; render(); return; }
+    else if(a==='desfazerMes'){ var vp0 = valorPago(c); if(vp0 !== null){ registrar(-vp0); delete c.pagos[mesAtual()]; } c.pagoMes = null; }
+    else if(a==='variavel'){ c.variavel = !variavel(c); }
     else if(a==='valor'){
       var novo = window.prompt('Novo valor de "'+c.desc+'" (R$):', String(c.valorParcela).replace('.',','));
       if(novo===null) return; var v = num(novo); if(!v) return; c.valorParcela = Math.round(v*100)/100;
@@ -292,18 +327,35 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     var lista = Object.keys(cats).map(function(k){return [k,cats[k]];}).sort(function(a,b){return b[1]-a[1];});
     var totCat = lista.reduce(function(s,x){return s+x[1];},0) || 1;
     var hoje = new Date().getDate();
+    var vars = fixas.filter(variavel), varPagas = vars.filter(pagoMes);
+    var difMes = Math.round(varPagas.reduce(function(s,c){return s + valorPago(c) - c.valorParcela;},0)*100)/100;
+    var estFixas = fixas.reduce(function(s,c){return s + (pagoMes(c) ? valorPago(c) : c.valorParcela);},0);
 
     var h = '<div class="kpis">'+
       kpi('Contas fixas por mês', brl(fixoMes), fixas.length+' conta'+(fixas.length===1?'':'s'))+
       kpi('Pago este mês', brl(hist[mesAtual()]||0), 'marcado no app')+
       kpi('Compras já pagas', pct+'%', brl(jaPago)+' de '+brl(totalCompras))+
       kpi('Livre das parcelas', maxRest ? nomeMes(maxRest-1) : 'Já está!', maxRest ? 'faltam '+maxRest+' '+(maxRest===1?'mês':'meses') : 'nenhuma parcela em aberto')+
+      kpi('Contas fixas deste mês', brl(estFixas), 'valor real das pagas + previsto das demais')+
+      kpi('Variáveis: real x previsto', varPagas.length ? (difMes>0?'+':difMes<0?'−':'')+brl(Math.abs(difMes)) : '—',
+          varPagas.length ? (difMes>0?'acima do previsto':difMes<0?'abaixo do previsto':'igual ao previsto')+' ('+varPagas.length+' de '+vars.length+' pagas)' : 'nenhuma conta variável paga ainda')+
       '</div>';
     h += '<div class="conta bloco"><h3>Compromisso nos próximos 6 meses</h3><div class="colunas">'+
       proj.map(function(v,i){ return '<div class="col'+(i===0?' atual':'')+'"><em>'+abrev(v)+'</em><i style="height:'+Math.round(v/maxP*75)+'%"></i><span>'+nomeMes(i)+'</span></div>'; }).join('')+
       '</div></div>';
     if(lista.length){ h += '<div class="conta bloco"><h3>Por categoria (gasto mensal)</h3>'+
       lista.map(function(x){ return '<div class="hbar"><div><span>'+esc(x[0])+'</span><b>'+brl(x[1])+' · '+Math.round(x[1]/totCat*100)+'%</b></div><p><i style="width:'+Math.round(x[1]/lista[0][1]*100)+'%"></i></p></div>'; }).join('')+'</div>'; }
+    if(vars.length){
+      h += '<div class="conta bloco"><h3>Contas que variam (últimos 6 meses)</h3>'+vars.map(function(c){
+        var vals = [];
+        for(var i=-5;i<=0;i++){ var d = new Date(); d.setDate(1); d.setMonth(d.getMonth()+i); var m = d.getFullYear()+'-'+('0'+(d.getMonth()+1)).slice(-2); vals.push([nomeMes(i), valorPago(c,m)]); }
+        var reais = vals.filter(function(x){return x[1]!==null;}).map(function(x){return x[1];});
+        var media = reais.length ? reais.reduce(function(s,v){return s+v;},0)/reais.length : null;
+        var mx = Math.max.apply(null, reais.concat([c.valorParcela,1]));
+        return '<div style="margin-bottom:16px"><div class="venc" style="border:0;padding:0 0 8px"><b>'+esc(c.desc)+'</b><span>previsto '+brl(c.valorParcela)+(media!==null?' · média '+brl(media):'')+'</span></div>'+
+          '<div class="colunas" style="height:95px">'+vals.map(function(x,i){ return '<div class="col'+(i===5?' atual':'')+'"><em>'+(x[1]!==null?abrev(x[1]):'–')+'</em><i style="height:'+(x[1]!==null?Math.round(x[1]/mx*60):0)+'%"></i><span>'+x[0]+'</span></div>'; }).join('')+'</div></div>';
+      }).join('')+'<div class="cat">Cada mês aparece aqui quando você informa o valor real pago.</div></div>';
+    }
     var pend = fixas.filter(function(c){return !pagoMes(c);}).sort(function(a,b){return (a.dia||99)-(b.dia||99);});
     if(pend.length){ h += '<div class="conta bloco"><h3>Contas fixas em aberto</h3>'+
       pend.map(function(c){
@@ -346,12 +398,14 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
   function previa(){
     var f = lerForm();
     if(!f.v){ $('previa').textContent='Preencha o valor para ver o cálculo.'; return; }
-    if(tipo==='recorrente'){ $('previa').innerHTML = 'Conta fixa de <b>'+brl(f.vp)+'</b> todo mês. Marque como paga a cada mês.'; return; }
+    if(tipo==='recorrente'){ $('previa').innerHTML = $('fVar').checked ? 'Valor previsto de <b>'+brl(f.vp)+'</b> por mês. Ao pagar, você informa o valor real da conta.' : 'Conta fixa de <b>'+brl(f.vp)+'</b> todo mês. Marque como paga a cada mês.'; return; }
     $('previa').innerHTML = f.n>1
       ? f.n+'x de <b>'+brl(f.vp)+'</b> = '+brl(f.vp*f.n)+'<br>Falta pagar: <b>'+brl((f.n-f.pagas)*f.vp)+'</b> ('+(f.n-f.pagas)+' parcelas)'
       : 'Conta única de <b>'+brl(f.vp)+'</b>';
   }
   ['fValor','fParc','fPagas'].forEach(function(id){ $(id).addEventListener('input', previa); });
+  $('fVar').addEventListener('change', previa);
+  $('fCat').addEventListener('change', function(){ if(this.value === 'Energia / Água / Gás') $('fVar').checked = true; previa(); });
   function abrir(sim){
     $('form').classList.toggle('aberto', sim); $('btnNovo').style.display = sim?'none':'block';
     if(sim){ $('form').reset(); $('fParc').value=1; $('fPagas').value=0;
@@ -368,7 +422,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     if(!d || !f.v){ $('previa').textContent='Informe a descrição e o valor.'; return; }
     var nova = { id: Date.now().toString(36)+Math.random().toString(36).slice(2,6), desc:d, cat:$('fCat').value,
       valorParcela:f.vp, parcelas:f.n, pagas:f.pagas, dia: parseInt($('fDia').value)||null };
-    if(tipo==='recorrente'){ nova.tipo='recorrente'; nova.pagoMes=null; }
+    if(tipo==='recorrente'){ nova.tipo='recorrente'; nova.pagoMes=null; nova.pagos={}; nova.variavel=$('fVar').checked; }
     contas.push(nova);
     abrir(false); render(); salvar();
   });
