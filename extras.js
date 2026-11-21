@@ -66,10 +66,13 @@
     return s ? s.charAt(0).toUpperCase()+s.slice(1) : '';
   }
   function acharConta(t){
-    var tn = ' '+norm(t)+' ', best = null, bestLen = 0;
+    var tn = ' '+norm(t).replace(/[^a-z0-9]+/g,' ')+' ', best = null, bestLen = 0;
     MC.contas.forEach(function(c){
       if(MC.quitada(c)) return;
-      norm(c.desc).split(/[^a-z0-9]+/).forEach(function(w){ if(w.length>=3 && tn.indexOf(w)>=0 && w.length>bestLen){ best = c; bestLen = w.length; } });
+      norm(c.desc).split(/[^a-z0-9]+/).forEach(function(w){
+        var bate = w.length>=3 ? tn.indexOf(w)>=0 : (w.length===2 && tn.indexOf(' '+w+' ')>=0);
+        if(bate && w.length>bestLen){ best = c; bestLen = w.length; }
+      });
     });
     return best;
   }
