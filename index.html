@@ -207,11 +207,11 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
   // histórico de pagamentos por mês (começa a contar a partir desta versão)
   var hist = {};
   try{ hist = JSON.parse(localStorage.getItem(CHAVE+'-hist')) || {}; }catch(e){ hist = {}; }
-  function registrar(v){
-    var m = mesAtual(); hist[m] = Math.round(((hist[m]||0) + v)*100)/100;
+  function registrar(v, m){
+    m = m || mesAtual(); hist[m] = Math.round(((hist[m]||0) + v)*100)/100;
     try{ localStorage.setItem(CHAVE+'-hist', JSON.stringify(hist)); }catch(e){}
   }
-  function marcarPago(c, v){ var m = mesAtual(), ant = valorPago(c); c.pagos = c.pagos || {}; c.pagos[m] = v; c.pagoMes = m; registrar(v - (ant || 0)); }
+  function marcarPago(c, v, m){ m = m || mesAtual(); var ant = valorPago(c, m); c.pagos = c.pagos || {}; c.pagos[m] = v; if(m === mesAtual()) c.pagoMes = m; registrar(v - (ant || 0), m); }
 
   // ---------- tela ----------
   function render(){
@@ -232,6 +232,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     if(pagas.length){ h += '<details><summary><h2>Quitadas ('+pagas.length+') ▾</h2></summary>' + pagas.map(card).join('') + '</details>'; }
     $('lista').innerHTML = h;
     renderMetricas();
+    if(window.MCExtra) MCExtra.render();
   }
   function esc(s){ return String(s).replace(/[&<>"]/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[ch];}); }
   function card(c){
@@ -312,7 +313,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
   function abrev(v){ return v >= 1000 ? 'R$'+(v/1000).toFixed(1).replace('.',',')+'k' : 'R$'+Math.round(v); }
   function kpi(t,v,s){ return '<div class="kpi"><small>'+t+'</small><b>'+v+'</b><span>'+s+'</span></div>'; }
   function renderMetricas(){
-    if(!contas.length){ $('vMetricas').innerHTML = '<div class="vazio">Cadastre contas para ver as métricas.</div>'; return; }
+    if(!contas.length){ $('vMetricas').innerHTML = '<div class="vazio">Cadastre contas para ver as métricas.</div>'; if(window.MCExtra) MCExtra.metricas(); return; }
     var fixas = contas.filter(rec), parc = contas.filter(function(c){return !rec(c);});
     var abertas = parc.filter(function(c){return !quitada(c);});
     var fixoMes = fixas.reduce(function(s,c){return s+c.valorParcela;},0);
@@ -365,6 +366,7 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
       abertas.slice().sort(function(a,b){return (a.parcelas-a.pagas)-(b.parcelas-b.pagas);}).map(function(c){
         var r = c.parcelas-c.pagas; return '<div class="venc"><span>'+esc(c.desc)+'</span><span>'+nomeMes(r-1)+' · faltam '+r+'</span></div>'; }).join('')+'</div>'; }
     $('vMetricas').innerHTML = h;
+    if(window.MCExtra) MCExtra.metricas();
   }
   $('abas').addEventListener('click', function(e){
     var b = e.target.closest('button'); if(!b) return; var v = b.getAttribute('data-v');
@@ -444,9 +446,16 @@ var u=c.toDataURL('image/png');['apple-touch-icon','icon'].forEach(function(r){v
     contas = d; render(); salvar(); $('msgBackup').textContent='Restaurado ✓';
   };
 
+  window.MC = {
+    get contas(){ return contas; }, setContas: function(d){ contas = d; },
+    get hist(){ return hist; }, setHist: function(x){ hist = x || {}; try{ localStorage.setItem(CHAVE+'-hist', JSON.stringify(hist)); }catch(e){} },
+    CHAVE: CHAVE, salvar: salvar, render: render, marcarPago: marcarPago, registrar: registrar, mesAtual: mesAtual,
+    brl: brl, num: num, esc: esc, rec: rec, quitada: quitada, valorPago: valorPago, variavel: variavel, nomeMes: nomeMes, abrev: abrev, kpi: kpi
+  };
   render();
   if('serviceWorker' in navigator){ try{ navigator.serviceWorker.register('sw.js'); }catch(e){} }
 })();
 </script>
+<script src="extras.js"></script>
 </body>
 </html>
