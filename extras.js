@@ -255,10 +255,77 @@
     return best;
   }
   var lote = [];
+  // ---------- texto colado (app do banco, PDF, e-mail, notificação) ----------
+  var MES3 = ['jan','fev','mar','abr','mai','jun','jul','ago','set','out','nov','dez'];
+  function ajustaAno(d, m, y){
+    if(!(d>=1 && d<=31 && m>=1 && m<=12)) return null;
+    var hoje = new Date(), ano = y ? (y < 100 ? 2000+y : y) : hoje.getFullYear();
+    var dt = new Date(ano, m-1, d);
+    if(!y && dt > new Date(hoje.getFullYear(), hoje.getMonth(), hoje.getDate()+1)) dt.setFullYear(ano-1);
+    return iso(dt);
+  }
+  function acharData(l){
+    var m, r, re = /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/g;
+    while((m = re.exec(l))){
+      if(/parcela\s*$/i.test(l.slice(0, m.index))) continue;
+      r = ajustaAno(+m[1], +m[2], m[3] ? +m[3] : 0);
+      if(r) return {iso:r, resto:l.slice(0, m.index)+' '+l.slice(m.index+m[0].length)};
+    }
+    if((m = l.match(/\b(\d{1,2})\s*(?:de\s+)?(jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez)[a-zçã]*\.?(?:\s*(?:de\s+)?(\d{4}))?(?![a-z])/i))){
+      r = ajustaAno(+m[1], MES3.indexOf(m[2].toLowerCase())+1, m[3] ? +m[3] : 0);
+      if(r) return {iso:r, resto:l.replace(m[0],' ')};
+    }
+    if((m = l.match(/^\s*(hoje|ontem|anteontem)\b/i))){ var k = m[1].toLowerCase(); return {iso:hojeISO(k==='hoje'?0:(k==='ontem'?-1:-2)), resto:l.replace(m[0],' ')}; }
+    return null;
+  }
+  function acharValor(s){
+    var m = s.match(/([-+−])?\s*(R\$)?\s*([-+−])?\s*(\d{1,3}(?:\.\d{3})*,\d{2})(?:\s*([DC])(?![A-Za-z]))?/);
+    if(!m) return null;
+    var sg = m[1] || m[3] || '';
+    return {valor:parseFloat(m[4].replace(/\./g,'').replace(',','.')), sg:(sg==='−' ? '-' : sg), ind:m[5] || '',
+      resto:s.replace(/[-+−]?\s*(R\$)?\s*[-+−]?\s*\d{1,3}(?:\.\d{3})*,\d{2}(\s*[DC](?![A-Za-z]))?/g, ' ')};
+  }
+  function parseTexto(t){
+    var linhas = t.replace(/\r/g,'').split('\n').map(function(s){ return s.replace(/\s+/g,' ').trim(); }).filter(Boolean);
+    var out = [], dataAtual = hojeISO(0), buf = [];
+    var limpa = function(s){ return s.replace(/\b\d{1,2}:\d{2}(:\d{2})?\b/g,' ').replace(/\s+/g,' ').replace(/^[\s\-–•·|:]+|[\s\-–•·|:]+$/g,'').trim(); };
+    linhas.forEach(function(l){
+      if(/^saldo|saldo (do dia|anterior|final|disponivel|atual|em conta)/.test(norm(l))){ buf = []; return; }
+      var d = acharData(l), resto = d ? d.resto : l;
+      if(d) dataAtual = d.iso;
+      var v = acharValor(resto);
+      if(!v){ resto = limpa(resto); if(resto.length > 1){ buf.push(resto); if(buf.length > 2) buf.shift(); } return; }
+      var desc = limpa(buf.join(' ')+' '+v.resto); buf = [];
+      var dn = norm(desc);
+      var entrada = v.ind==='C' || v.sg==='+' || (v.ind!=='D' && /recebid|deposito|salario|estorno|reembolso|rendimento|resgate|credito em conta/.test(dn));
+      out.push({data:dataAtual, valor:(entrada ? 1 : -1)*v.valor, desc:desc || 'Lançamento', fitid:''});
+    });
+    return out;
+  }
+  function lerTexto(t){
+    var txs = /<STMTTRN>/i.test(t) ? parseOFX(t) : (parseCSV(t) || []);
+    return txs.length ? txs : parseTexto(t);
+  }
+  function abrirColar(){
+    abrirSheet('Colar extrato', '<div class="mc-dica">Copie o extrato no app do banco, num PDF, e-mail ou notificação de compra e cole aqui. Ex.: “07/11 Padaria Pão Quente R$ 32,90”.</div>'+
+      '<textarea id="mcCola" rows="8" style="font-size:15px" placeholder="Toque e segure aqui → Colar"></textarea>'+
+      '<button class="mc-btn" id="mcLerCola">Ler extrato</button>');
+    $('mcLerCola').onclick = function(){ var t = $('mcCola').value; if(!t.trim()){ $('mcCola').focus(); return; } processar(t); };
+    if(navigator.clipboard && navigator.clipboard.readText){
+      navigator.clipboard.readText().then(function(t){
+        if(!t || !t.trim() || !$('mcCola')) return;
+        $('mcCola').value = t;
+        if(lerTexto(t).length) processar(t);
+      }).catch(function(){});
+    }
+  }
+
   function importar(file){
-    lerArquivo(file).then(function(t){
-      var txs = /<STMTTRN>/i.test(t) ? parseOFX(t) : parseCSV(t);
-      if(!txs || !txs.length){ abrirSheet('Importar extrato', '<div class="mc-erro">Não reconheci esse arquivo. Exporte o extrato em OFX ou CSV.</div>'); return; }
+    lerArquivo(file).then(processar).catch(function(){ abrirSheet('Importar extrato', '<div class="mc-erro">Não consegui ler o arquivo.</div>'); });
+  }
+  function processar(t){
+      var txs = lerTexto(t);
+      if(!txs.length){ abrirSheet('Importar extrato', '<div class="mc-erro">Não encontrei lançamentos. Copie linhas com data, descrição e valor (ex.: 07/11 Padaria 32,90).</div>'); return; }
       var novos = [], repetidos = 0, usadas = {};
       txs.forEach(function(x){
         if(x.valor >= 0 || /saldo/.test(norm(x.desc))) return;
@@ -276,7 +343,6 @@
         if(s && s.acao==='pagarRec') usadas[s.conta.id+'|'+mesDe(x.data)] = 1;
       });
       mostrarImport(novos, repetidos);
-    }).catch(function(){ abrirSheet('Importar extrato', '<div class="mc-erro">Não consegui ler o arquivo.</div>'); });
   }
   function opcoes(x){
     var o = '<option value="g"'+(x.sel==='g'?' selected':'')+'>Gasto avulso</option>';
@@ -399,7 +465,8 @@
   css.textContent = [
     '.mc-acoes{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}',
     '.mc-acoes button{border:0;border-radius:14px;padding:14px 8px;font-size:15px;font-weight:700}',
-    '#btnVoz{background:var(--verde);color:#fff}',
+    '#btnVoz{background:var(--verde);color:#fff;grid-column:1 / -1}',
+    '#btnCola{background:#fff1d6;color:#8a5a00}',
     '#btnImp{background:#e6eefc;color:#2d5bb9}',
     '.mc-fundo{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);z-index:50;display:flex;align-items:flex-end}',
     '.mc-sheet{background:var(--fundo);width:100%;max-width:640px;margin:0 auto;border-radius:20px 20px 0 0;padding:16px 14px calc(18px + env(safe-area-inset-bottom));max-height:88vh;overflow:auto}',
@@ -432,12 +499,13 @@
   ].join('\n');
   document.head.appendChild(css);
 
-  $('btnNovo').insertAdjacentHTML('beforebegin', '<div class="mc-acoes"><button id="btnVoz">🎤 Anotar gasto</button><button id="btnImp">📄 Importar extrato</button></div><input type="file" id="mcArq" style="display:none">');
+  $('btnNovo').insertAdjacentHTML('beforebegin', '<div class="mc-acoes"><button id="btnVoz">🎤 Anotar gasto</button><button id="btnCola">📋 Colar extrato</button><button id="btnImp">📄 Arquivo do banco</button></div><input type="file" id="mcArq" style="display:none">');
   document.body.insertAdjacentHTML('beforeend', '<div id="mcSheet" class="mc-fundo oculto"><div class="mc-sheet"><div class="mc-topo"><b id="mcTitulo"></b><button id="mcFechar">✕</button></div><div id="mcCorpo"></div></div></div>');
   $('lista').insertAdjacentHTML('afterend', '<div id="mcGastos"></div>');
   $('mcFechar').onclick = fechar;
   $('mcSheet').addEventListener('click', function(e){ if(e.target===this) fechar(); });
   $('btnVoz').onclick = abrirAnotar;
+  $('btnCola').onclick = abrirColar;
   $('btnImp').onclick = function(){ $('mcArq').value = ''; $('mcArq').click(); };
   $('mcArq').onchange = function(){ if(this.files && this.files[0]) importar(this.files[0]); };
   $('mcGastos').addEventListener('click', function(e){
@@ -449,7 +517,7 @@
   var fc = $('fCat');
   CATS.forEach(function(c){ if(![].some.call(fc.options, function(o){ return o.value===c; })){ var o = document.createElement('option'); o.textContent = c; fc.insertBefore(o, fc.lastElementChild); } });
 
-  window.MCExtra = { render:render, metricas:metricas, interpretar:interpretar, parseOFX:parseOFX, parseCSV:parseCSV, gastos:function(){ return gastos; } };
+  window.MCExtra = { render:render, metricas:metricas, interpretar:interpretar, parseOFX:parseOFX, parseCSV:parseCSV, parseTexto:parseTexto, processar:processar, gastos:function(){ return gastos; } };
   initBackup();
   MC.render();
 })();
